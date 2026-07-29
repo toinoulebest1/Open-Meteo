@@ -1,0 +1,65 @@
+# Docker Compose file for deploying the Open-Meteo API on Coolify.
+#
+# In Coolify: create a new resource -> "Docker Compose" build pack and set the
+# compose location to `/docker-compose.coolify.yml`.
+#
+# Differences with the plain `docker-compose.yml`:
+# - No `container_name`, so Coolify can manage container names itself
+# - `expose` instead of `ports`, routing is handled by the Coolify proxy
+# - `SERVICE_FQDN_*` magic variable, so Coolify assigns a domain and TLS
+# - Healthchecks, so deployments only go live once the API answers
+# - Sync configuration exposed as environment variables
+#
+# See docs/coolify.md for the full guide.
+
+volumes:
+  open-meteo-data:
+
+services:
+  # ================================
+  # HTTP API
+  # ================================
+  openmeteo-api:
+    image: ghcr.io/open-meteo/open-meteo:latest
+    # To build your own modified source instead of the prebuilt image, comment
+    # out `image:` above and uncomment the block below. Building requires a lot
+    # of resources (~16 GB RAM, 30-60 minutes).
+    # build:
+    #   context: .
+    #   dockerfile: Dockerfile
+    command: ["serve", "--env", "production", "--hostname", "0.0.0.0", "--port", "8080"]
+    environment:
+      # Coolify generates the public URL and configures the proxy for port 8080
+      - SERVICE_FQDN_OPENMETEOAPI_8080
+      - LOG_LEVEL=${LOG_LEVEL:-info}
+      # Optional: read the database directly from S3 instead of storing it
+      # locally. Keep `REMOTE_DATA_DIRECTORY` empty to use the local database.
+      - REMOTE_DATA_DIRECTORY=${REMOTE_DATA_DIRECTORY:-}
+      - CACHE_SIZE=${CACHE_SIZE:-10GB}
+      # Maximum number of locations per API request
+      - LOCATIONS_LIMIT=${LOCATIONS_LIMIT:-1000}
+    volumes:
+      - open-meteo-data:/app/data
+    expose:
+      - "8080"
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS http://127.0.0.1:8080/robots.txt >/dev/null 2>&1 || wget -q -O- http://127.0.0.1:8080/robots.txt >/dev/null 2>&1 || exit 1"]
+      interval: 15s
+      timeout: 5s
+      retries: 10
+      start_period: 40s
+    restart: unless-stopped
+
+  # ================================
+  # Weather database synchronisation
+  # ================================
+  # Downloads the Open-Meteo database from the AWS open-data bucket and keeps it
+  # up to date. Every additional model/variable costs disk space, start small.
+  openmeteo-sync:
+    image: ghcr.io/open-meteo/open-meteo:latest
+    command: sync ${SYNC_DOMAINS:-ecmwf_ifs025} ${SYNC_VARIABLES:-temperature_2m} --past-days ${SYNC_PAST_DAYS:-3} --repeat-interval ${SYNC_REPEAT_INTERVAL:-10} --concurrent ${SYNC_CONCURRENT:-2}
+    environment:
+      - LOG_LEVEL=${LOG_LEVEL:-info}
+    volumes:
+      - open-meteo-data:/app/data
+    restart: unless-stopped

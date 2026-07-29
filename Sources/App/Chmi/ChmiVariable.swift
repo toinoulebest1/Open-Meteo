@@ -1,0 +1,223 @@
+import Foundation
+
+/// Surface variables provided by the ČHMÚ ALADIN models.
+/// ALADIN does not publish a usable WMO weather symbol, so weather_code is omitted
+/// and can be derived later via WeatherCode.calculate().
+enum ChmiSurfaceVariable: String, CaseIterable, GenericVariable, GenericVariableMixable {
+    case temperature_2m
+    case surface_temperature
+    case dew_point_2m
+    case relative_humidity_2m
+    case wind_speed_10m
+    case wind_direction_10m
+    case wind_gusts_10m
+    case pressure_msl
+    case cloud_cover
+    case cloud_cover_low
+    case cloud_cover_mid
+    case cloud_cover_high
+    case precipitation
+    case rain
+    case snowfall_water_equivalent
+    case snow_depth_water_equivalent
+    case shortwave_radiation
+    case direct_radiation
+    case cape
+    case visibility
+    case sunshine_duration
+
+    var storePreviousForecast: Bool {
+        switch self {
+        case .temperature_2m, .relative_humidity_2m: return true
+        case .precipitation, .rain, .snowfall_water_equivalent: return true
+        case .pressure_msl: return true
+        case .cloud_cover: return true
+        case .shortwave_radiation: return true
+        case .wind_gusts_10m, .wind_speed_10m, .wind_direction_10m: return true
+        default:
+            return false
+        }
+    }
+
+    var omFileName: (file: String, level: Int) {
+        return (rawValue, 0)
+    }
+
+    var scalefactor: Float {
+        switch self {
+        case .temperature_2m, .surface_temperature, .dew_point_2m:
+            return 20
+        case .relative_humidity_2m:
+            return 1
+        case .cloud_cover, .cloud_cover_low, .cloud_cover_mid, .cloud_cover_high:
+            return 1
+        case .wind_speed_10m:
+            return 10
+        case .wind_direction_10m:
+            return 1
+        case .wind_gusts_10m:
+            return 10
+        case .pressure_msl:
+            return 10
+        case .precipitation, .rain, .snowfall_water_equivalent:
+            return 10
+        case .snow_depth_water_equivalent:
+            return 1
+        case .shortwave_radiation, .direct_radiation:
+            return 1
+        case .cape:
+            return 0.1
+        case .visibility:
+            return 0.05
+        case .sunshine_duration:
+            return 1
+        }
+    }
+
+    var interpolation: ReaderInterpolation {
+        switch self {
+        case .temperature_2m, .surface_temperature, .dew_point_2m:
+            return .hermite(bounds: nil)
+        case .relative_humidity_2m:
+            return .hermite(bounds: 0...100)
+        case .cloud_cover, .cloud_cover_low, .cloud_cover_mid, .cloud_cover_high:
+            return .hermite(bounds: 0...100)
+        case .wind_speed_10m:
+            return .hermite(bounds: 0...10e9)
+        case .wind_direction_10m:
+            return .linearDegrees
+        case .wind_gusts_10m:
+            return .hermite(bounds: 0...10e9)
+        case .pressure_msl:
+            return .hermite(bounds: nil)
+        case .precipitation, .rain, .snowfall_water_equivalent:
+            return .backwards_sum
+        case .snow_depth_water_equivalent:
+            return .linear
+        case .shortwave_radiation, .direct_radiation:
+            return .solar_backwards_averaged
+        case .cape:
+            return .hermite(bounds: 0...10e9)
+        case .visibility:
+            return .linear
+        case .sunshine_duration:
+            return .backwards_sum
+        }
+    }
+
+    var unit: SiUnit {
+        switch self {
+        case .temperature_2m, .surface_temperature, .dew_point_2m:
+            return .celsius
+        case .relative_humidity_2m:
+            return .percentage
+        case .cloud_cover, .cloud_cover_low, .cloud_cover_mid, .cloud_cover_high:
+            return .percentage
+        case .wind_speed_10m:
+            return .metrePerSecond
+        case .wind_direction_10m:
+            return .degreeDirection
+        case .wind_gusts_10m:
+            return .metrePerSecond
+        case .pressure_msl:
+            return .hectopascal
+        case .precipitation, .rain, .snowfall_water_equivalent:
+            return .millimetre
+        case .snow_depth_water_equivalent:
+            return .millimetre
+        case .shortwave_radiation, .direct_radiation:
+            return .wattPerSquareMetre
+        case .cape:
+            return .joulePerKilogram
+        case .visibility:
+            return .metre
+        case .sunshine_duration:
+            return .seconds
+        }
+    }
+
+    var isElevationCorrectable: Bool {
+        return self == .temperature_2m || self == .surface_temperature || self == .dew_point_2m
+    }
+}
+
+/// Types of pressure level variables.
+/// Wind speed and direction are not stored: they are derived from U/V components by the API.
+enum ChmiPressureVariableType: String, CaseIterable {
+    case temperature
+    case wind_u_component
+    case wind_v_component
+    case vertical_velocity
+    case geopotential_height
+    case relative_humidity
+}
+
+/// A pressure level variable on a given level in hPa / mb
+struct ChmiPressureVariable: PressureVariableRespresentable, GenericVariable, Hashable, GenericVariableMixable {
+    let variable: ChmiPressureVariableType
+    let level: Int
+
+    var storePreviousForecast: Bool {
+        return false
+    }
+
+    var omFileName: (file: String, level: Int) {
+        return (rawValue, 0)
+    }
+
+    var scalefactor: Float {
+        switch variable {
+        case .temperature:
+            return (2..<10).interpolated(atFraction: (300..<1000).fraction(of: Float(level)))
+        case .wind_u_component, .wind_v_component:
+            return (3..<10).interpolated(atFraction: (500..<1000).fraction(of: Float(level)))
+        case .geopotential_height:
+            return (0.05..<1).interpolated(atFraction: (0..<500).fraction(of: Float(level)))
+        case .vertical_velocity:
+            return (20..<100).interpolated(atFraction: (0..<500).fraction(of: Float(level)))
+        case .relative_humidity:
+            return (0.2..<1).interpolated(atFraction: (0..<800).fraction(of: Float(level)))
+        }
+    }
+
+    var interpolation: ReaderInterpolation {
+        switch variable {
+        case .temperature:
+            return .hermite(bounds: nil)
+        case .wind_u_component:
+            return .hermite(bounds: nil)
+        case .wind_v_component:
+            return .hermite(bounds: nil)
+        case .vertical_velocity:
+            return .hermite(bounds: nil)
+        case .geopotential_height:
+            return .hermite(bounds: nil)
+        case .relative_humidity:
+            return .hermite(bounds: 0...100)
+        }
+    }
+
+    var unit: SiUnit {
+        switch variable {
+        case .temperature:
+            return .celsius
+        case .wind_u_component:
+            return .metrePerSecond
+        case .wind_v_component:
+            return .metrePerSecond
+        case .vertical_velocity:
+            return .metrePerSecondNotUnitConverted
+        case .geopotential_height:
+            return .metre
+        case .relative_humidity:
+            return .percentage
+        }
+    }
+
+    var isElevationCorrectable: Bool {
+        return false
+    }
+}
+
+/// Combined surface and pressure level variables
+typealias ChmiVariable = SurfaceAndPressureVariable<ChmiSurfaceVariable, ChmiPressureVariable>

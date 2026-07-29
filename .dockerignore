@@ -1,0 +1,7 @@
+.build/
+.swiftpm/
+.git/
+data/
+data_run/
+data_spatial/
+.DS_Store
